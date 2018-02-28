@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE in the project root for license information.
 
 
-import cryptoLib from './crypto/crypto-jsrsasign';
+import cryptoLib from './crypto/crypto-rsa';
 import Log from './Log';
 
 const { jws, KeyUtil, X509, crypto, hextob64u, AllowedSigningAlgs } = cryptoLib;
