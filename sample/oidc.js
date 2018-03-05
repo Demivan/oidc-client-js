@@ -118,6 +118,7 @@ module.exports = function(baseUrl, app) {
     prependBaseUrlToMetadata(baseUrl);
 
     app.get(metadataPath, function(req, res) {
+        //res.send("<h1>not json...</h1>"); return;
         res.json(metadata);
     });
 
@@ -163,7 +164,10 @@ module.exports = function(baseUrl, app) {
         var url = req.query.post_logout_redirect_uri;
         if (url) {
             var state = req.query.state;
-            res.redirect(url + "?state=" + state);;
+            if (state) {
+                url += "?state=" + state;
+            }
+            res.redirect(url);
         }
         else {
             res.send("logged out");

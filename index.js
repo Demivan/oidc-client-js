@@ -15,6 +15,7 @@ import CordovaPopupNavigator from './src/CordovaPopupNavigator';
 import CordovaIFrameNavigator from './src/CordovaIFrameNavigator';
 import CheckSessionIFrame from './src/CheckSessionIFrame';
 import TokenRevocationClient from './src/TokenRevocationClient';
+import SessionMonitor from './src/SessionMonitor';
 import Global from './src/Global';
 
 export {
@@ -30,6 +31,7 @@ export {
     CordovaIFrameNavigator,
     CheckSessionIFrame,
     TokenRevocationClient,
+    SessionMonitor,
     Global
 };
 
@@ -46,5 +48,6 @@ export default {
     CordovaIFrameNavigator,
     CheckSessionIFrame,
     TokenRevocationClient,
+    SessionMonitor,
     Global
 };

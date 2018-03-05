@@ -10,7 +10,7 @@ const OidcMetadataUrlPath = '.well-known/openid-configuration';
 
 const DefaultResponseType = "id_token";
 const DefaultScope = "openid";
-const DefaultStaleStateAge = 60; // seconds
+const DefaultStaleStateAge = 60 * 5; // seconds
 const DefaultClockSkewInSeconds = 60 * 5;
 
 export default class OidcClientSettings {
@@ -28,7 +28,9 @@ export default class OidcClientSettings {
         // other behavior
         stateStore = new WebStorageStateStore(),
         ResponseValidatorCtor = ResponseValidator,
-        MetadataServiceCtor = MetadataService
+        MetadataServiceCtor = MetadataService,
+        // extra query params
+        extraQueryParams = {}
     } = {}) {
 
         this._authority = authority;
@@ -58,6 +60,8 @@ export default class OidcClientSettings {
         this._stateStore = stateStore;
         this._validator = new ResponseValidatorCtor(this);
         this._metadataService = new MetadataServiceCtor(this);
+
+        this._extraQueryParams = typeof extraQueryParams === 'object' ? extraQueryParams : {};
     }
 
     // client config
@@ -178,5 +182,17 @@ export default class OidcClientSettings {
     }
     get metadataService() {
         return this._metadataService;
+    }
+
+    // extra query params
+    get extraQueryParams() {
+        return this._extraQueryParams;
+    }
+    set extraQueryParams(value) {
+        if (typeof value === 'object'){
+            this._extraQueryParams = value;
+        } else {
+            this._extraQueryParams = {};
+        }
     }
 }

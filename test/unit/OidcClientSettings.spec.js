@@ -312,7 +312,7 @@ describe("OidcClientSettings", function () {
             let subject = new OidcClientSettings({
                 client_id: 'client',
             });
-            subject.staleStateAge.should.equal(60);
+            subject.staleStateAge.should.equal(300);
         });
 
         it("should return value from initial settings", function () {
@@ -391,5 +391,52 @@ describe("OidcClientSettings", function () {
             subject.metadataService.should.equal(temp);
         });
     });
+
+    describe("extraQueryParams", function() {
+
+        it("should use default value", function () {
+            let subject = new OidcClientSettings({
+                client_id: 'client'
+            });
+            subject.extraQueryParams.should.deep.equal({});
+        });
+
+        it("should return value from initial settings", function () {
+            let subject = new OidcClientSettings({
+                client_id: 'client',
+                extraQueryParams: {
+                    'hd': 'domain.com'
+                }
+            });
+            subject.extraQueryParams.should.deep.equal({ 'hd': 'domain.com' });
+        });
+
+        it("should not set value from initial settings if not object, but set default value ({})", function () {
+            let subject = new OidcClientSettings({
+                client_id: 'client',
+                extraQueryParams: 123456
+            });
+            subject.extraQueryParams.should.deep.equal({});
+        });
+
+        it("should set it if object", function () {
+            let subject = new OidcClientSettings({
+                client_id: 'client',
+            });
+            subject.extraQueryParams = { 'hd': 'domain.com' };
+            subject.extraQueryParams.should.deep.equal({ 'hd': 'domain.com' });
+        });
+
+        it("should clear it if not object", function() {
+            let subject = new OidcClientSettings({
+                client_id: 'client',
+                extraQueryParams: {
+                    'hd': 'domain.com',
+                }
+            });
+            subject.extraQueryParams = undefined;
+            subject.extraQueryParams.should.deep.equal({});
+        });
+    })
 
 });
