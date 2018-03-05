@@ -231,7 +231,13 @@ class JsonService {
                 Log.debug("HTTP response received, status", req.status);
                 
                 if (req.status === 200) {
-                    resolve(JSON.parse(req.responseText));
+                    try {
+                        resolve(JSON.parse(req.responseText));
+                    }
+                    catch (e) {
+                        Log.error("Error parsing JSON response", e.message);
+                        reject(e);
+                    }
                 }
                 else {
                     reject(Error(req.statusText + " (" + req.status + ")"));
@@ -1023,8 +1029,8 @@ class ResponseValidator {
                     Log.debug("user info claims received from user info endpoint");
 
                     if (claims.sub !== response.profile.sub) {
-                        Log.error("sub from user info endpoint does not match sub in id_token");
-                        return Promise.reject(new Error("sub from user info endpoint does not match sub in id_token"));
+                        Log.error("sub from user info endpoint does not match sub in access_token");
+                        return Promise.reject(new Error("sub from user info endpoint does not match sub in access_token"));
                     }
 
                     response.profile = this._mergeClaims(response.profile, claims);
@@ -1288,7 +1294,7 @@ const OidcMetadataUrlPath$1 = '.well-known/openid-configuration';
 
 const DefaultResponseType = "id_token";
 const DefaultScope = "openid";
-const DefaultStaleStateAge = 60; // seconds
+const DefaultStaleStateAge = 60 * 5; // seconds
 const DefaultClockSkewInSeconds = 60 * 5;
 
 class OidcClientSettings {
@@ -1306,7 +1312,9 @@ class OidcClientSettings {
         // other behavior
         stateStore = new WebStorageStateStore(),
         ResponseValidatorCtor = ResponseValidator,
-        MetadataServiceCtor = MetadataService
+        MetadataServiceCtor = MetadataService,
+        // extra query params
+        extraQueryParams = {}
     } = {}) {
 
         this._authority = authority;
@@ -1336,6 +1344,8 @@ class OidcClientSettings {
         this._stateStore = stateStore;
         this._validator = new ResponseValidatorCtor(this);
         this._metadataService = new MetadataServiceCtor(this);
+
+        this._extraQueryParams = typeof extraQueryParams === 'object' ? extraQueryParams : {};
     }
 
     // client config
@@ -1456,6 +1466,18 @@ class OidcClientSettings {
     }
     get metadataService() {
         return this._metadataService;
+    }
+
+    // extra query params
+    get extraQueryParams() {
+        return this._extraQueryParams;
+    }
+    set extraQueryParams(value) {
+        if (typeof value === 'object'){
+            this._extraQueryParams = value;
+        } else {
+            this._extraQueryParams = {};
+        }
     }
 }
 
@@ -1699,7 +1721,8 @@ class SigninRequest {
         // mandatory
         url, client_id, redirect_uri, response_type, scope, authority,
         // optional
-        data, prompt, display, max_age, ui_locales, id_token_hint, login_hint, acr_values, resource, request, request_uri
+        data, prompt, display, max_age, ui_locales, id_token_hint, login_hint, acr_values, resource,
+        request, request_uri, extraQueryParams,
     }) {
         if (!url) {
             Log.error("No url passed to SigninRequest");
@@ -1744,6 +1767,10 @@ class SigninRequest {
             if (optional[key]) {
                 url = UrlUtility.addQueryParam(url, key, optional[key]);
             }
+        }
+
+        for(let key in extraQueryParams){
+            url = UrlUtility.addQueryParam(url, key, extraQueryParams[key]);
         }
 
         this.url = url;
@@ -1890,11 +1917,11 @@ class OidcClient {
 
     createSigninRequest({
         response_type, scope, redirect_uri, 
-        // data was meant to be the place a caller could indiate the data to 
+        // data was meant to be the place a caller could indicate the data to
         // have round tripped, but people were getting confused, so i added state (since that matches the spec) 
         // and so now if data is not passed, but state is then state will be used
-        data, state,
-        prompt, display, max_age, ui_locales, id_token_hint, login_hint, acr_values, resource, request, request_uri} = {},
+        data, state, prompt, display, max_age, ui_locales, id_token_hint, login_hint, acr_values,
+        resource, request, request_uri, extraQueryParams } = {},
         stateStore
     ) {
         Log.debug("OidcClient.createSigninRequest");
@@ -1911,6 +1938,7 @@ class OidcClient {
         ui_locales = ui_locales || this._settings.ui_locales;
         acr_values = acr_values || this._settings.acr_values;
         resource = resource || this._settings.resource;
+        extraQueryParams = extraQueryParams || this._settings.extraQueryParams;
         
         let authority = this._settings.authority;
 
@@ -1925,7 +1953,8 @@ class OidcClient {
                 scope,
                 data: data || state,
                 authority,
-                prompt, display, max_age, ui_locales, id_token_hint, login_hint, acr_values, resource, request, request_uri
+                prompt, display, max_age, ui_locales, id_token_hint, login_hint, acr_values,
+                resource, request, request_uri, extraQueryParams,
             });
 
             var signinState = signinRequest.state;
@@ -2164,6 +2193,10 @@ class PopupWindow {
         this._reject(new Error(message));
     }
 
+    close() {
+        this._cleanup(false);
+    }
+
     _cleanup(keepOpen) {
         Log.debug("PopupWindow._cleanup");
 
@@ -2251,7 +2284,7 @@ class PopupNavigator {
 
 // Copyright (c) Brock Allen & Dominick Baier. All rights reserved.
 
-const DefaultTimeout = 5000;
+const DefaultTimeout = 10000;
 
 class IFrameWindow {
 
@@ -2267,7 +2300,14 @@ class IFrameWindow {
         window.addEventListener("message", this._boundMessageEvent, false);
         
         this._frame = window.document.createElement("iframe");
+
+        // shotgun approach
+        this._frame.style.visibility = "hidden";
+        this._frame.style.position = "absolute";
         this._frame.style.display = "none";
+        this._frame.style.width = 0;
+        this._frame.style.height = 0;
+        
         window.document.body.appendChild(this._frame);
     }
 
@@ -2304,16 +2344,22 @@ class IFrameWindow {
         this._reject(new Error(message));
     }
 
+    close() {
+        this._cleanup();
+    }
+
     _cleanup() {
-        Log.debug("IFrameWindow._cleanup");
+        if (this._frame) {
+            Log.debug("IFrameWindow._cleanup");
 
-        window.removeEventListener("message", this._boundMessageEvent, false);
-        window.clearTimeout(this._timer);
-        window.document.body.removeChild(this._frame);
+            window.removeEventListener("message", this._boundMessageEvent, false);
+            window.clearTimeout(this._timer);
+            window.document.body.removeChild(this._frame);
 
-        this._timer = null;
-        this._frame = null;
-        this._boundMessageEvent = null;
+            this._timer = null;
+            this._frame = null;
+            this._boundMessageEvent = null;
+        }
     }
 
     _timeout() {
@@ -2391,6 +2437,7 @@ class UserManagerSettings extends OidcClientSettings {
         silent_redirect_uri,
         silentRequestTimeout,
         automaticSilentRenew = false,
+        includeIdTokenInSilentRenew = true,
         monitorSession = true,
         checkSessionInterval = DefaultCheckSessionInterval,
         revokeAccessTokenOnSignout = false,
@@ -2410,6 +2457,7 @@ class UserManagerSettings extends OidcClientSettings {
         this._silent_redirect_uri = silent_redirect_uri;
         this._silentRequestTimeout = silentRequestTimeout;
         this._automaticSilentRenew = !!automaticSilentRenew;
+        this._includeIdTokenInSilentRenew = includeIdTokenInSilentRenew;
         this._accessTokenExpiringNotificationTime = accessTokenExpiringNotificationTime;
 
         this._monitorSession = monitorSession;
@@ -2444,6 +2492,9 @@ class UserManagerSettings extends OidcClientSettings {
     }
     get automaticSilentRenew() {
         return !!(this.silent_redirect_uri && this._automaticSilentRenew);
+    }
+    get includeIdTokenInSilentRenew() {
+        return this._includeIdTokenInSilentRenew;
     }
     get accessTokenExpiringNotificationTime() {
         return this._accessTokenExpiringNotificationTime;
@@ -2761,17 +2812,30 @@ class SilentRenewService {
 
     constructor(userManager) {
         this._userManager = userManager;
-        this._userManager.events.addAccessTokenExpiring(this._tokenExpiring.bind(this));
-
-        // this will trigger loading of the user so the expiring events can be initialized
-        this._userManager.getUser().then(user=>{
-            // deliberate nop
-        }).catch(err=>{
-            // catch to suppress errors since we're in a ctor
-            Log.error("Error from getUser:", err.message);
-        });
     }
-    
+
+    start() {
+        if (!this._callback) {
+            this._callback = this._tokenExpiring.bind(this);
+            this._userManager.events.addAccessTokenExpiring(this._callback);
+            
+            // this will trigger loading of the user so the expiring events can be initialized
+            this._userManager.getUser().then(user=>{
+                // deliberate nop
+            }).catch(err=>{
+                // catch to suppress errors since we're in a ctor
+                Log.error("Error from getUser:", err.message);
+            });
+        }
+    }
+
+    stop() {
+        if (this._callback) {
+            this._userManager.events.removeAccessTokenExpiring(this._callback);
+            delete this._callback;
+        }
+    }
+
     _tokenExpiring() {
         Log.debug("SilentRenewService automatically renewing access token");
         
@@ -2799,9 +2863,15 @@ class CheckSessionIFrame {
         this._frame_origin = url.substr(0, idx);
 
         this._frame = window.document.createElement("iframe");
-        this._frame.style.display = "none";
-        this._frame.src = url;
 
+        // shotgun approach
+        this._frame.style.visibility = "hidden";
+        this._frame.style.position = "absolute";
+        this._frame.style.display = "none";
+        this._frame.style.width = 0;
+        this._frame.style.height = 0;
+
+        this._frame.src = url;
     }
     load() {
         return new Promise((resolve) => {
@@ -3069,12 +3139,14 @@ class UserManager extends OidcClient {
         super(settings);
 
         this._events = new UserManagerEvents(settings);
-
+        this._silentRenewService = new SilentRenewServiceCtor(this);
+        
         // order is important for the following properties; these services depend upon the events.
         if (this.settings.automaticSilentRenew) {
             Log.debug("automaticSilentRenew is configured, setting up silent renew");
-            this._silentRenewService = new SilentRenewServiceCtor(this);
+            this.startSilentRenew();
         }
+
         if (this.settings.monitorSession) {
             Log.debug("monitorSession is configured, setting up session monitor");
             this._sessionMonitor = new SessionMonitorCtor(this);
@@ -3121,12 +3193,34 @@ class UserManager extends OidcClient {
     removeUser() {
         Log.debug("UserManager.removeUser");
 
-        return this._storeUser(null).then(() => {
+        return this.storeUser(null).then(() => {
             Log.info("user removed from storage");
             this._events.unload();
         });
     }
 
+    signinRedirect(args) {
+        Log.debug("UserManager.signinRedirect");
+        return this._signinStart(args, this._redirectNavigator).then(()=>{
+            Log.info("signinRedirect successful");
+        });
+    }
+    signinRedirectCallback(url) {
+        Log.debug("UserManager.signinRedirectCallback");
+        return this._signinEnd(url || this._redirectNavigator.url).then(user => {
+            if (user) {
+                if (user.profile && user.profile.sub) {
+                    Log.info("signinRedirectCallback successful, signed in sub: ", user.profile.sub);
+                }
+                else {
+                    Log.info("signinRedirectCallback successful");
+                }
+            }
+
+            return user;
+        });
+    }
+    
     signinPopup(args = {}) {
         Log.debug("UserManager.signinPopup");
 
@@ -3171,6 +3265,7 @@ class UserManager extends OidcClient {
             return user;
         });
     }
+
     signinSilent(args = {}) {
         Log.debug("UserManager.signinSilent");
 
@@ -3184,7 +3279,7 @@ class UserManager extends OidcClient {
         args.prompt = "none";
 
         let setIdToken;
-        if (args.id_token_hint) {
+        if (args.id_token_hint || !this.settings.includeIdTokenInSilentRenew) {
             setIdToken = Promise.resolve();
         }
         else {
@@ -3269,40 +3364,56 @@ class UserManager extends OidcClient {
             return this._signinEnd(navResponse.url);
         });
     }
+    _signinStart(args, navigator, navigatorParams = {}) {
+        Log.debug("_signinStart");
+
+        return navigator.prepare(navigatorParams).then(handle => {
+            Log.debug("got navigator window handle");
+
+            return this.createSigninRequest(args).then(signinRequest => {
+                Log.debug("got signin request");
+
+                navigatorParams.url = signinRequest.url;
+                navigatorParams.id = signinRequest.state.id;
+                
+                return handle.navigate(navigatorParams);
+            }).catch(err => {
+                if (handle.close) {
+                    Log.debug("Error after preparing navigator, closing navigator window");
+                    handle.close();
+                }
+                throw err;
+            });
+        });
+    }
+    _signinEnd(url) {
+        Log.debug("_signinEnd");
+
+        return this.processSigninResponse(url).then(signinResponse => {
+            Log.debug("got signin response");
+
+            let user = new User(signinResponse);
+
+            return this.storeUser(user).then(() => {
+                Log.debug("user stored");
+
+                this._events.load(user);
+
+                return user;
+            });
+        });
+    }
     _signinCallback(url, navigator) {
         Log.debug("_signinCallback");
         return navigator.callback(url);
     }
-    _signout(args, navigator, navigatorParams = {}) {
-        Log.debug("_signout");
-        return this._signoutStart(args, navigator, navigatorParams).then(navResponse => {
-            return this._signoutEnd(navResponse.url);
-        });
-    }
 
-    signinRedirect(args) {
-        Log.debug("UserManager.signinRedirect");
-        return this._signinStart(args, this._redirectNavigator).then(()=>{
-            Log.info("signinRedirect successful");
-        });
-    }
-    signinRedirectCallback(url) {
-        Log.debug("UserManager.signinRedirectCallback");
-        return this._signinEnd(url || this._redirectNavigator.url).then(user => {
-            if (user) {
-                if (user.profile && user.profile.sub) {
-                    Log.info("signinRedirectCallback successful, signed in sub: ", user.profile.sub);
-                }
-                else {
-                    Log.info("signinRedirectCallback successful");
-                }
-            }
-
-            return user;
-        });
-    }
-    signoutRedirect(args) {
+    signoutRedirect(args = {}) {
         Log.debug("UserManager.signoutRedirect");
+        let postLogoutRedirectUri = args.post_logout_redirect_uri || this.settings.post_logout_redirect_uri;
+        if (postLogoutRedirectUri){
+            args.post_logout_redirect_uri = postLogoutRedirectUri;
+        }
         return this._signoutStart(args, this._redirectNavigator).then(()=>{
             Log.info("signoutRedirect successful");
         });
@@ -3311,8 +3422,10 @@ class UserManager extends OidcClient {
         Log.debug("UserManager.signoutRedirectCallback");
         return this._signoutEnd(url || this._redirectNavigator.url).then(response=>{
             Log.info("signoutRedirectCallback successful");
+            return response;
         });
     }
+
     signoutPopup(args = {}) {
         Log.debug("UserManager.signinPopup");
 
@@ -3348,39 +3461,12 @@ class UserManager extends OidcClient {
         });
     }
 
-    _signinStart(args, navigator, navigatorParams = {}) {
-        Log.debug("_signinStart");
-
-        return navigator.prepare(navigatorParams).then(handle => {
-            Log.debug("got navigator window handle");
-
-            return this.createSigninRequest(args).then(signinRequest => {
-                Log.debug("got signin request");
-
-                navigatorParams.url = signinRequest.url;
-                navigatorParams.id = signinRequest.state.id;
-                return handle.navigate(navigatorParams);
-            });
+    _signout(args, navigator, navigatorParams = {}) {
+        Log.debug("_signout");
+        return this._signoutStart(args, navigator, navigatorParams).then(navResponse => {
+            return this._signoutEnd(navResponse.url);
         });
     }
-    _signinEnd(url) {
-        Log.debug("_signinEnd");
-
-        return this.processSigninResponse(url).then(signinResponse => {
-            Log.debug("got signin response");
-
-            let user = new User(signinResponse);
-
-            return this._storeUser(user).then(() => {
-                Log.debug("user stored");
-
-                this._events.load(user);
-
-                return user;
-            });
-        });
-    }
-
     _signoutStart(args = {}, navigator, navigatorParams = {}) {
         Log.debug("_signoutStart");
 
@@ -3413,6 +3499,12 @@ class UserManager extends OidcClient {
                         });
                     });
                 });
+            }).catch(err => {
+                if (handle.close) {
+                    Log.debug("Error after preparing navigator, closing navigator window");
+                    handle.close();
+                }
+                throw err;
             });
         });
     }
@@ -3438,7 +3530,7 @@ class UserManager extends OidcClient {
                     user.expires_at = null;
                     user.token_type = null;
 
-                    return this._storeUser(user).then(() => {
+                    return this.storeUser(user).then(() => {
                         Log.debug("user stored");
                         this._events.load(user);
                     });
@@ -3462,7 +3554,15 @@ class UserManager extends OidcClient {
 
         return this._tokenRevocationClient.revoke(access_token, required).then(() => true);
     }
-    
+
+    startSilentRenew() {
+        this._silentRenewService.start();
+    }
+
+    stopSilentRenew() {
+        this._silentRenewService.stop();
+    }
+
     get _userStoreKey() {
         return `user:${this.settings.authority}:${this.settings.client_id}`;
     }
@@ -3481,15 +3581,15 @@ class UserManager extends OidcClient {
         });
     }
 
-    _storeUser(user) {
+    storeUser(user) {
         if (user) {
-            Log.debug("_storeUser storing user");
+            Log.debug("storeUser storing user");
 
             var storageString = user.toStorageString();
             return this._userStore.set(this._userStoreKey, storageString);
         }
         else {
-            Log.debug("_storeUser removing user storage");
+            Log.debug("storeUser removing user storage");
             return this._userStore.remove(this._userStoreKey);
         }
     }
@@ -3579,6 +3679,10 @@ class CordovaPopupWindow {
         this._reject(new Error(message));
     }
 
+    close() {
+        this._cleanup();
+    }
+
     _cleanup() {
         Log.debug("CordovaPopupWindow._cleanup");
 
@@ -3627,8 +3731,9 @@ var index = {
     CordovaIFrameNavigator,
     CheckSessionIFrame,
     TokenRevocationClient,
+    SessionMonitor,
     Global
 };
 
 export default index;
-export { Log, OidcClient, OidcClientSettings, WebStorageStateStore, InMemoryWebStorage, UserManager, AccessTokenEvents, MetadataService, CordovaPopupNavigator, CordovaIFrameNavigator, CheckSessionIFrame, TokenRevocationClient, Global };
+export { Log, OidcClient, OidcClientSettings, WebStorageStateStore, InMemoryWebStorage, UserManager, AccessTokenEvents, MetadataService, CordovaPopupNavigator, CordovaIFrameNavigator, CheckSessionIFrame, TokenRevocationClient, SessionMonitor, Global };
